@@ -3,43 +3,118 @@ extern crate bidule;
 use bidule::*;
 
 #[test]
-fn test_0() {
-  let label_0 = Label::new();
-  let mut label_0_ = label_0.clone();
-  let mut label = Label::new();
+fn frp() {
+  use std::cell::RefCell;
+  use std::rc::Rc;
 
-  label.subscribe(move |signal| {
-    match *signal {
-      LabelSignal::TextChanged(ref txt) => label_0_.set(txt),
-      LabelSignal::Submit => label_0_.reset()
+  enum Button {
+    Push
+  }
+
+  enum Counter {
+    Increment,
+    Decrement,
+    Reset
+  }
+
+  let minus_button: Stream<Button> = Stream::new();
+  let plus_button: Stream<Button> = Stream::new();
+  let reset_button: Stream<Button> = Stream::new();
+
+  let minus = minus_button.map(|_| Counter::Decrement);
+  let plus = plus_button.map(|_| Counter::Increment);
+  let reset = reset_button.map(|_| Counter::Reset);
+
+  let label = minus.merge(&plus).merge(&reset).fold(0, |x, sig| {
+    match *sig {
+      Counter::Increment => x + 1,
+      Counter::Decrement => x - 1,
+      Counter::Reset => 0
     }
-  });
+  }).filter(|x| x % 2 == 0); // get only even counters
 
-  label.set("coucou");
-  assert_eq!(label_0.borrow().as_str(), "coucou");
+  // FIXME: this part is ugly, we need to find a better API for “inspecting” streams
+  let counter = Rc::new(RefCell::new(0));
+  let counter_ = counter.clone();
+  label.subscribe(move |x| *counter_.borrow_mut() = *x);
 
-  label.submit();
-  assert_eq!(label_0.borrow().as_str(), "");
+  assert_eq!(*counter.borrow(), 0);
+
+  minus_button.send(&Button::Push);
+  assert_eq!(*counter.borrow(), 0); // not -1 because -1 is odd
+
+  minus_button.send(&Button::Push);
+  assert_eq!(*counter.borrow(), -2);
+
+  plus_button.send(&Button::Push);
+  assert_eq!(*counter.borrow(), -2); // not -1, it’s odd
+
+  reset_button.send(&Button::Push);
+  assert_eq!(*counter.borrow(), 0);
 }
 
 #[test]
-fn test_1() {
-  let label = Label::new();
-  let mut label_0 = label.clone();
-  let mut button = ToggleButton::new();
+fn mutual_recursion() {
+  use std::cell::RefCell;
+  use std::rc::Rc;
 
-  button.subscribe(move |signal| {
-    match *signal {
-      ToggleButtonSignal::Pressed => label_0.set("hey!"),
-      ToggleButtonSignal::Released => label_0.reset()
+  #[derive(Clone, Debug, Eq, PartialEq)]
+  enum Button {
+    ChangeLabel(String),
+    Push
+  }
+
+  fn f(sig: &Button) -> Option<Button> {
+    match *sig {
+      Button::Push => Some(Button::ChangeLabel("foo".to_owned())),
+      _ => None
     }
-  });
+  }
 
-  assert_eq!(label.borrow().as_str(), "");
+  let (x, y) = Stream::entangled(f, f);
 
-  button.push();
-  assert_eq!(label.borrow().as_str(), "hey!");
-  
-  button.release();
-  assert_eq!(label.borrow().as_str(), "");
+  let x_ref = Rc::new(RefCell::new(Button::Push));
+  let x_ref_ = x_ref.clone();
+
+  let y_ref = Rc::new(RefCell::new(Button::Push));
+  let y_ref_ = y_ref.clone();
+
+  x.subscribe(move |a| *x_ref_.borrow_mut() = a.clone());
+  y.subscribe(move |a| *y_ref_.borrow_mut() = a.clone());
+
+  assert_eq!(*x_ref.borrow(), Button::Push);
+  assert_eq!(*y_ref.borrow(), Button::Push);
+
+  x.send(&Button::Push);
+  assert_eq!(*x_ref.borrow(), Button::Push);
+  assert_eq!(*y_ref.borrow(), Button::ChangeLabel("foo".to_owned()));
+
+  y.send(&Button::Push);
+  assert_eq!(*x_ref.borrow(), Button::ChangeLabel("foo".to_owned()));
+  assert_eq!(*y_ref.borrow(), Button::Push);
+}
+
+#[test]
+fn unmerge() {
+  use std::cell::RefCell;
+  use std::rc::Rc;
+
+  let tuple = Stream::new();
+  let (x, y) = tuple.unmerge();
+
+  let x_ref = Rc::new(RefCell::new(0));
+  let x_ref_ = x_ref.clone();
+
+  let y_ref = Rc::new(RefCell::new(0));
+  let y_ref_ = y_ref.clone();
+
+  x.subscribe(move |a| *x_ref_.borrow_mut() = *a);
+  y.subscribe(move |a| *y_ref_.borrow_mut() = *a);
+
+  assert_eq!(*x_ref.borrow(), 0);
+  assert_eq!(*y_ref.borrow(), 0);
+
+  tuple.send(&(34, 13));
+  assert_eq!(*x_ref.borrow(), 34);
+  assert_eq!(*y_ref.borrow(), 13);
 }
