@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{Receiver, channel};
 
-type Subscribers<Sig> = RefCell<Vec<Box<FnMut(&Sig)>>>;
+type Subscribers<'a, Sig> = RefCell<Vec<Box<FnMut(&Sig) + 'a>>>;
 
-enum SubscribersRef<Sig> {
-  Own(Rc<Subscribers<Sig>>),
-  Weak(Weak<Subscribers<Sig>>)
+enum SubscribersRef<'a, Sig> {
+  Own(Rc<Subscribers<'a, Sig>>),
+  Weak(Weak<Subscribers<'a, Sig>>)
 }
 
 /// Either one or another type.
@@ -21,11 +21,11 @@ pub enum Either<A, B> {
 /// A stream represents a composable signal producer. When you decide to send a signal down a
 /// stream, any other streams composed with that first stream will also receive the signal. This
 /// enables to construct more interesting and complex streams by composing them.
-pub struct Stream<Sig> {
-  subscribers: SubscribersRef<Sig>
+pub struct Stream<'a, Sig> {
+  subscribers: SubscribersRef<'a, Sig>
 }
 
-impl<Sig> Stream<Sig> where Sig: 'static {
+impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   /// Create a new stream.
   pub fn new() -> Self {
     let subscribers = SubscribersRef::Own(Rc::new(RefCell::new(Vec::new())));
@@ -57,7 +57,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   ///
   /// This function enables to “observe” any signal flowing out of the stream. However, do not abuse
   /// this function, as its primary use is to build other combinators.
-  pub fn subscribe<F>(&self, subscriber: F) where F: 'static + FnMut(&Sig) {
+  pub fn subscribe<F>(&self, subscriber: F) where F: 'a + FnMut(&Sig) {
     match self.subscribers {
       SubscribersRef::Own(ref subscribers) => subscribers.borrow_mut().push(Box::new(subscriber)),
       SubscribersRef::Weak(ref weak) => {
@@ -95,9 +95,9 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   pub fn map<F, OutSig>(
     &self,
     f: F
-  ) -> Stream<OutSig>
-    where F: 'static + Fn(&Sig) -> OutSig,
-          OutSig: 'static {
+  ) -> Stream<'a, OutSig>
+    where F: 'a + Fn(&Sig) -> OutSig,
+          OutSig: 'a {
     let mapped_stream = Stream::new();
     let mapped_stream_ = mapped_stream.new_same();
 
@@ -114,9 +114,9 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   pub fn filter_map<F, OutSig>(
     &self,
     f: F
-  ) -> Stream<OutSig>
-    where F: 'static + Fn(&Sig) -> Option<OutSig>,
-          OutSig: 'static {
+  ) -> Stream<'a, OutSig>
+    where F: 'a + Fn(&Sig) -> Option<OutSig>,
+          OutSig: 'a {
     let mapped_stream = Stream::new();
     let mapped_stream_ = mapped_stream.new_same();
 
@@ -130,7 +130,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   }
 
   /// Filter the signals flowing out of a stream with a predicate.
-  pub fn filter<F>(&self, pred: F) -> Self where F: 'static + Fn(&Sig) -> bool {
+  pub fn filter<F>(&self, pred: F) -> Self where F: 'a + Fn(&Sig) -> bool {
     let filtered = Stream::new();
     let filtered_ = filtered.new_same();
 
@@ -148,9 +148,9 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     &self,
     value: A,
     f: F
-  ) -> Stream<A>
-    where F: 'static + Fn(A, &Sig) -> A,
-          A: 'static {
+  ) -> Stream<'a, A>
+    where F: 'a + Fn(A, &Sig) -> A,
+          A: 'a {
     let folded_stream = Stream::new();
     let folded_stream_ = folded_stream.new_same();
     let mut boxed = Some(value);
@@ -190,10 +190,10 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   /// Zip two streams with each other.
   pub fn zip<SigRHS>(
     &self,
-    rhs: &Stream<SigRHS>
-  ) -> Stream<Either<Sig, SigRHS>>
+    rhs: &Stream<'a, SigRHS>
+  ) -> Stream<'a, Either<Sig, SigRHS>>
   where Sig: Clone,
-        SigRHS: 'static + Clone {
+        SigRHS: 'a + Clone {
     let zipped = Stream::new();
     let zipped_self = zipped.new_same();
     let zipped_rhs = zipped.new_same();
@@ -218,10 +218,10 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   pub fn entangled<F, G, GSig>(
     f: F,
     g: G
-  ) -> (Self, Stream<GSig>)
-    where F: 'static + Fn(&Sig) -> Option<GSig>,
-          G: 'static + Fn(&GSig) -> Option<Sig>,
-          GSig: 'static {
+  ) -> (Self, Stream<'a, GSig>)
+    where F: 'a + Fn(&Sig) -> Option<GSig>,
+          G: 'a + Fn(&GSig) -> Option<Sig>,
+          GSig: 'a {
     let fs = Stream::new();
     let gs = Stream::new();
     let fs_ = fs.new_weak();
@@ -254,9 +254,9 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   }
 }
 
-impl<SigA, SigB> Stream<Either<SigA, SigB>> where SigA: 'static, SigB: 'static {
+impl<'a, SigA, SigB> Stream<'a, Either<SigA, SigB>> where SigA: 'static, SigB: 'static {
   /// Split a stream of zipped values into two streams.
-  pub fn unzip(&self) -> (Stream<SigA>, Stream<SigB>) {
+  pub fn unzip(&self) -> (Stream<'a, SigA>, Stream<'a, SigB>) {
     let a = Stream::new();
     let a_ = a.new_same();
     let b = Stream::new();
