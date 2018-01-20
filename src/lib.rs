@@ -8,6 +8,13 @@ enum SubscribersRef<Sig> {
   Weak(Weak<Subscribers<Sig>>)
 }
 
+/// Either one or another type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Either<A, B> {
+  Left(A),
+  Right(B)
+}
+
 /// A stream of signals.
 ///
 /// A stream represents a composable signal producer. When you decide to send a signal down a
@@ -24,10 +31,21 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     Stream { subscribers }
   }
 
-  /// Create a new, non-owned, version of this stream.
-  fn new_weak(&self) -> Self {
+  /// Create a new, version of this stream by behaving the same way as the input reference (if it’s
+  /// an owned pointer, it clones ownership; if it’s a weak pointer, it clone the weak pointer).
+  fn new_same(&self) -> Self {
     let subscribers = match self.subscribers {
       SubscribersRef::Own(ref rc) => SubscribersRef::Own(rc.clone()),
+      SubscribersRef::Weak(ref weak) => SubscribersRef::Weak(weak.clone())
+    };
+
+    Stream { subscribers }
+  }
+
+  /// Create new, non-owning version of this stream.
+  fn new_weak(&self) -> Self {
+    let subscribers = match self.subscribers {
+      SubscribersRef::Own(ref rc) => SubscribersRef::Weak(Rc::downgrade(rc)),
       SubscribersRef::Weak(ref weak) => SubscribersRef::Weak(weak.clone())
     };
 
@@ -80,7 +98,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     where F: 'static + Fn(&Sig) -> OutSig,
           OutSig: 'static {
     let mapped_stream = Stream::new();
-    let mapped_stream_ = mapped_stream.new_weak();
+    let mapped_stream_ = mapped_stream.new_same();
 
     self.subscribe(move |sig| {
       mapped_stream_.send(&f(sig));
@@ -99,7 +117,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     where F: 'static + Fn(&Sig) -> Option<OutSig>,
           OutSig: 'static {
     let mapped_stream = Stream::new();
-    let mapped_stream_ = mapped_stream.new_weak();
+    let mapped_stream_ = mapped_stream.new_same();
 
     self.subscribe(move |sig| {
       if let Some(ref mapped_sig) = f(sig) {
@@ -113,7 +131,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   /// Filter the signals flowing out of a stream with a predicate.
   pub fn filter<F>(&self, pred: F) -> Self where F: 'static + Fn(&Sig) -> bool {
     let filtered = Stream::new();
-    let filtered_ = filtered.new_weak();
+    let filtered_ = filtered.new_same();
 
     self.subscribe(move |sig| {
       if pred(sig) {
@@ -133,7 +151,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     where F: 'static + Fn(A, &Sig) -> A,
           A: 'static {
     let folded_stream = Stream::new();
-    let folded_stream_ = folded_stream.new_weak();
+    let folded_stream_ = folded_stream.new_same();
     let mut boxed = Some(value);
 
     self.subscribe(move |sig| {
@@ -153,8 +171,8 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   /// results.
   pub fn merge(&self, rhs: &Self) -> Self {
     let merged = Stream::new();
-    let merged_self = merged.new_weak();
-    let merged_rhs = merged.new_weak();
+    let merged_self = merged.new_same();
+    let merged_rhs = merged.new_same();
 
     self.subscribe(move |sig| {
       merged_self.send(sig);
@@ -165,6 +183,29 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     });
 
     merged
+  }
+
+  // FIXME: see whether we can do the same thing without Clone
+  /// Zip two streams into one.
+  pub fn zip<SigRHS>(
+    &self,
+    rhs: &Stream<SigRHS>
+  ) -> Stream<Either<Sig, SigRHS>>
+  where Sig: Clone,
+        SigRHS: 'static + Clone {
+    let zipped = Stream::new();
+    let zipped_self = zipped.new_same();
+    let zipped_rhs = zipped.new_same();
+
+    self.subscribe(move |sig| {
+      zipped_self.send(&Either::Left(sig.clone()));
+    });
+
+    rhs.subscribe(move |sig| {
+      zipped_rhs.send(&Either::Right(sig.clone()));
+    });
+
+    zipped
   }
 
   /// Create a pair of entangled streams.
@@ -201,17 +242,19 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   }
 }
 
-impl<SigA, SigB> Stream<(SigA, SigB)> where SigA: 'static, SigB: 'static {
-  /// Split a stream of merged values into two streams.
-  pub fn unmerge(&self) -> (Stream<SigA>, Stream<SigB>) {
+impl<SigA, SigB> Stream<Either<SigA, SigB>> where SigA: 'static, SigB: 'static {
+  /// Split a stream of zipped values into two streams.
+  pub fn unzip(&self) -> (Stream<SigA>, Stream<SigB>) {
     let a = Stream::new();
-    let a_ = a.new_weak();
+    let a_ = a.new_same();
     let b = Stream::new();
-    let b_ = b.new_weak();
+    let b_ = b.new_same();
 
     self.subscribe(move |sig| {
-      a_.send(&sig.0);
-      b_.send(&sig.1);
+      match *sig {
+        Either::Left(ref l) => a_.send(l),
+        Either::Right(ref r) => b_.send(r)
+      }
     });
 
     (a, b)
