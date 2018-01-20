@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
+use std::sync::mpsc::{Receiver, channel};
 
 type Subscribers<Sig> = RefCell<Vec<Box<FnMut(&Sig)>>>;
 
@@ -186,7 +187,7 @@ impl<Sig> Stream<Sig> where Sig: 'static {
   }
 
   // FIXME: see whether we can do the same thing without Clone
-  /// Zip two streams into one.
+  /// Zip two streams with each other.
   pub fn zip<SigRHS>(
     &self,
     rhs: &Stream<SigRHS>
@@ -239,6 +240,17 @@ impl<Sig> Stream<Sig> where Sig: 'static {
     });
 
     (fs, gs)
+  }
+
+  /// Sink a stream.
+  pub fn sink(&self) -> Receiver<Sig> where Sig: Clone {
+    let (sx, rx) = channel();
+
+    self.subscribe(move |sig| {
+      let _ = sx.send(sig.clone());
+    });
+
+    rx
   }
 }
 
