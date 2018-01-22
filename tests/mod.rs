@@ -95,12 +95,35 @@ fn mutual_recursion() {
 }
 
 #[test]
-fn unmerge() {
+fn zip() {
+  use std::cell::RefCell;
+  use std::rc::Rc;
+
+  let x = Stream::new();
+  let y = Stream::new();
+  let z = x.zip(&y);
+
+  let z_ref = Rc::new(RefCell::new(Either::Right(3)));
+  let z_ref_ = z_ref.clone();
+
+  z.subscribe(move |a| *z_ref_.borrow_mut() = a.clone());
+
+  assert_eq!(*z_ref.borrow(), Either::Right(3));
+
+  x.send(&false);
+  assert_eq!(*z_ref.borrow(), Either::Left(false));
+
+  y.send(&42);
+  assert_eq!(*z_ref.borrow(), Either::Right(42));
+}
+
+#[test]
+fn unzip() {
   use std::cell::RefCell;
   use std::rc::Rc;
 
   let tuple = Stream::new();
-  let (x, y) = tuple.unmerge();
+  let (x, y) = tuple.unzip();
 
   let x_ref = Rc::new(RefCell::new(0));
   let x_ref_ = x_ref.clone();
@@ -114,7 +137,8 @@ fn unmerge() {
   assert_eq!(*x_ref.borrow(), 0);
   assert_eq!(*y_ref.borrow(), 0);
 
-  tuple.send(&(34, 13));
+  tuple.send(&Either::Left(34));
+  tuple.send(&Either::Right(13));
   assert_eq!(*x_ref.borrow(), 34);
   assert_eq!(*y_ref.borrow(), 13);
 }
