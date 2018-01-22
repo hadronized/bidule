@@ -1,3 +1,194 @@
+//! The bidule FRP crate.
+//!
+//! This crate provides a few simple primitives to write FRP-driven programs. Everything revolves
+//! around the concept of a `Stream`.
+//!
+//! # Streams
+//!
+//! A `Stream` is a *stream of typed signals*. A stream of signals will get a *signal* as input
+//! and will broadcast it downwards. You can compose streams with each other with very simple
+//! combinators, such as `map`, `filter`, `filter_map`, `zip`, `unzip`, `merge`, `fold`, `sink`,
+//! etc.
+//!
+//! ## Creating streams and send signals
+//!
+//! Streams are typed. You can use type inference or give them an explicit type:
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! let my_stream: Stream<i32> = Stream::new();
+//! ```
+//!
+//! That’s all you need to create a stream. A stream represent a value that will be flowing in *at
+//! some time*.
+//!
+//! > Even though it’s not strictly the same thing, you can see a similitude with
+//! > [futures](https://crates.io/crates/futures).
+//!
+//! When you’re ready to send signals, just call the `send` function:
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! let my_stream: Stream<i32> = Stream::new();
+//!
+//! my_stream.send(&1);
+//! my_stream.send(&2);
+//! my_stream.send(&3);
+//! ```
+//!
+//! ## Subscriptions
+//!
+//! A single stream like that one won’t do much – actually, it’ll do nothing. The first thing we
+//! might want to do is to subscribe a closure to do something when a signal is emitted. This is
+//! done with the `subscribe` function.
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! let my_stream: Stream<i32> = Stream::new();
+//! 
+//! my_stream.subscribe(|sig| {
+//!   // print the signal on stdout each time it’s flowing in
+//!   println!("signal: {:?}", sig);
+//! });
+//!
+//! my_stream.send(&1);
+//! my_stream.send(&2);
+//! my_stream.send(&3);
+//! ```
+//!
+//! ## FRP basics
+//!
+//! However, FRP is not about callbacks. It’s actually the opposite, to be honest. We try to reduce
+//! the use of callbacks as much as possible. FRP solves this by inversing the way you must work:
+//! instead of subscribing callbacks to react to something, you transform that something to create
+//! new values or objects. This is akin to the kind of transformations you do with `Future`.
+//!
+//! Let’s get our feet wet: let’s create a new stream that will only emit signals for even values:
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! let int_stream: Stream<i32> = Stream::new();
+//! let even_stream = int_stream.filter(|x| x % 2 == 0);
+//! ```
+//!
+//! `even_stream` has type `Stream<i32>` and will only emit signals when the signals when the
+//! input signal is `even`.
+//!
+//! Let’s try something more complicated: on those signals, if the value is less or equal to 10,
+//! output `"Hello, world!"`; otherwise, output "See you!".
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! let int_stream: Stream<i32> = Stream::new();
+//! let even_stream = int_stream.filter(|x| x % 2 == 0);
+//! let str_stream = even_stream.map(|x| if *x <= 10 { "Hello, world!" } else { "See you!" });
+//! ```
+//!
+//! This is really easy, no trap.
+//!
+//! Ok, let’s try something more different. Some kind of a *Hello world* for FRP.
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! enum Button {
+//!   Pressed,
+//!   Released
+//! }
+//!
+//! fn unbuttonify(button: &Button, v: i32) -> Option<i32> {
+//!   match button {
+//!     ref Released => Some(v),
+//!     _ => None
+//!   }
+//! }
+//!
+//! let minus = Stream::new();
+//! let plus = Stream::new();
+//! let counter =
+//!   minus.filter_map(|b| unbuttonify(b, -1))
+//!        .merge(&plus.filter_map(|b| unbuttonify(b, 1)))
+//!        .fold(0, |a, x| a + x);
+//! ```
+//!
+//! In this snippet, we have two buttons: `minus` and `plus`. If we hit the `minus` button, we want
+//! a counter to be decremented and if we hit the `plus` button, the counter must increment.
+//!
+//! FRP solves that problem by expressing `counter` in terms of both `minus` and `plus`. The first
+//! thing we do is to map a number on the stream that broadcasts button signals. Whenever that
+//! signal is a `Button::Released`, we return a given number. For `minus`, we return `-1` and for
+//! `plus`, we return `1` – or `+1`, it’s the same thing. That gives us two new streams. Let’s see
+//! the types to have a deeper understanding:
+//!
+//! - `minus: Stream<Button>`
+//! - `plus: Stream<Button>`
+//! - `minus.filter_map(|b| unbuttonify(b, -1)): Stream<i32>
+//! - `plus.filter_map(|b| unbuttonify(b, 1)): Stream<i32>
+//!
+//! The `merge` method is very simple: it takes two streams that emits the same type of signals and
+//! merges them into a single stream that will broadcasts both the signals:
+//!
+//! - `minus.filter_map(|b| unbuttonify(b, -1)).merge(plus.filter_map(|b| unbuttonify(b, 1)): Stream<i32>): Stream<i32>`
+//!
+//! The next and final step is to `fold` those `i32` into the final value of the counter by applying
+//! successive additions. This is done with the `fold` method, that takes the initial value – in the
+//! case of a counter, it’s `0` – and the function to accumulate, with the accumulator as first
+//! argument and the iterated value as second argument.
+//!
+//! The resulting stream, which type is `Stream<i32>`, will then contain the value of the counter.
+//! You can test it by sending `Button` signals on both `minus` and `plus`: the resulting signal
+//! in `counter` will be correct.
+//!
+//! There exist several more, interesting combinators to work with your streams. For instance, if
+//! you don’t want to map a function over two streams to make them compatible with each other, you
+//! can still perform some kind of a merge. That operation is called a `zip` and the resulting
+//! stream will yield either the value from the first stream or the value of the other at any time a
+//! signal is emitted. Its dual method is called `unzip` and will split a stream apart into two
+//! streams if it’s a zipped stream. See `Either` for further details.
+//!
+//! ## Sinking
+//!
+//! *Sinking* is the action to consume the signals of a stream and collect them. The current
+//! implementation uses non-blocking buffering: the stream will collect the output signals in a
+//! buffer you can read. For instance:
+//!
+//! ```
+//! use bidule::Stream;
+//!
+//! enum Button {
+//!   Pressed,
+//!   Released
+//! }
+//!
+//! fn unbuttonify(button: &Button, v: i32) -> Option<i32> {
+//!   match button {
+//!     ref Released => Some(v),
+//!     _ => None
+//!   }
+//! }
+//!
+//! let minus = Stream::new();
+//! let plus = Stream::new();
+//! let counter =
+//!   minus.filter_map(|b| unbuttonify(b, -1))
+//!        .merge(&plus.filter_map(|b| unbuttonify(b, 1)))
+//!        .fold(0, |a, x| a + x);
+//!
+//! let rx = counter.sink();
+//!
+//! // do something with minus and plus
+//! // …
+//!
+//! for v in rx.try_iter() {
+//!   println!("read a new value of the counter: {}", v);
+//! }
+//! ```
+
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{Receiver, channel};
@@ -10,6 +201,10 @@ enum SubscribersRef<'a, Sig> {
 }
 
 /// Either one or another type.
+///
+/// This type is especially useful for zipping and unzipping streams. If a stream has a type like
+/// `Stream<Either<A, B>>`, it means you can unzip it and get two streams: `Stream<A>` and
+/// `Stream<B>`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Either<A, B> {
   Left(A),
