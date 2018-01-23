@@ -75,11 +75,10 @@
 //! let even_stream = int_stream.filter(|x| x % 2 == 0);
 //! ```
 //!
-//! `even_stream` has type `Stream<i32>` and will only emit signals when the signals when the
-//! input signal is `even`.
+//! `even_stream` has type `Stream<i32>` and will only emit signals when the input signal is `even`.
 //!
 //! Let’s try something more complicated: on those signals, if the value is less or equal to 10,
-//! output `"Hello, world!"`; otherwise, output "See you!".
+//! output `"Hello, world!"`; otherwise, output `"See you!"`.
 //!
 //! ```
 //! use bidule::Stream;
@@ -89,9 +88,9 @@
 //! let str_stream = even_stream.map(|x| if *x <= 10 { "Hello, world!" } else { "See you!" });
 //! ```
 //!
-//! This is really easy, no trap.
+//! This is really easy; no trap involved.
 //!
-//! Ok, let’s try something more different. Some kind of a *Hello world* for FRP.
+//! Ok, let’s try something else. Some kind of a *Hello world* for FRP.
 //!
 //! ```
 //! use bidule::Stream;
@@ -127,10 +126,10 @@
 //!
 //! - `minus: Stream<Button>`
 //! - `plus: Stream<Button>`
-//! - `minus.filter_map(|b| unbuttonify(b, -1)): Stream<i32>
-//! - `plus.filter_map(|b| unbuttonify(b, 1)): Stream<i32>
+//! - `minus.filter_map(|b| unbuttonify(b, -1)): Stream<i32>`
+//! - `plus.filter_map(|b| unbuttonify(b, 1)): Stream<i32>`
 //!
-//! The `merge` method is very simple: it takes two streams that emits the same type of signals and
+//! The `merge` method is very simple: it takes two streams that emit the same type of signals and
 //! merges them into a single stream that will broadcasts both the signals:
 //!
 //! - `minus.filter_map(|b| unbuttonify(b, -1)).merge(plus.filter_map(|b| unbuttonify(b, 1)): Stream<i32>): Stream<i32>`
@@ -142,20 +141,23 @@
 //!
 //! The resulting stream, which type is `Stream<i32>`, will then contain the value of the counter.
 //! You can test it by sending `Button` signals on both `minus` and `plus`: the resulting signal
-//! in `counter` will be correct.
+//! in `counter` will be correctly decrementing or incrementing.
 //!
 //! There exist several more, interesting combinators to work with your streams. For instance, if
-//! you don’t want to map a function over two streams to make them compatible with each other, you
-//! can still perform some kind of a merge. That operation is called a `zip` and the resulting
-//! stream will yield either the value from the first stream or the value of the other at any time a
-//! signal is emitted. Its dual method is called `unzip` and will split a stream apart into two
-//! streams if it’s a zipped stream. See `Either` for further details.
+//! you don’t want to map a function over two streams to make them compatible with each other – they
+//! have different types, you can still perform some kind of a merge. That operation is called a
+//! `zip` and the resulting stream will yield either the value from the first – left – stream or the
+//! value of the other – right – as soon as a signal is emitted. Its dual method is called `unzip`
+//! and will split a stream apart into two streams if it’s a zipped stream. See `Either` for further
+//! details.
 //!
 //! ## Sinking
 //!
 //! *Sinking* is the action to consume the signals of a stream and collect them. The current
-//! implementation uses non-blocking buffering: the stream will collect the output signals in a
-//! buffer you can read. For instance:
+//! implementation uses non-blocking buffering when sending signals, and reading is up to you: the
+//! stream will collect the output signals in a buffer you can read via the
+//! [Iterator](https://doc.rust-lang.org/std/iter/trait.Iterator.html) trait. For instance,
+//! non-blocking reads:
 //!
 //! ```
 //! use bidule::Stream;
