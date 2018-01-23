@@ -101,8 +101,8 @@
 //! }
 //!
 //! fn unbuttonify(button: &Button, v: i32) -> Option<i32> {
-//!   match button {
-//!     ref Released => Some(v),
+//!   match *button {
+//!     Button::Released => Some(v),
 //!     _ => None
 //!   }
 //! }

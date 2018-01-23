@@ -1,3 +1,7 @@
+## 0.1.5
+
+- Fixed an example in documentation.
+
 ## 0.1.4
 
 - Fixed an example in documentation.
