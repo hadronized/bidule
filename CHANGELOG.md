@@ -1,3 +1,7 @@
+## 0.1.4
+
+- Fixed an example in documentation.
+
 ## 0.1.3
 
 - Changed the description of the project to match a more complete and exhaustive definition of
