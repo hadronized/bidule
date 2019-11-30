@@ -287,7 +287,7 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   /// Map any signals flowing out a stream.
   ///
   /// Please note that this function is total: you cannot ignore signals. Even if you map
-  /// *uninteresting signals* to `None`, you’ll still compose signals for those. If are interested
+  /// *uninteresting signals* to `None`, you’ll still compose signals for those. If you're interested
   /// in filtering signals while mapping, have a look at the `filter_map` function.
   pub fn map<F, OutSig>(
     &self,
