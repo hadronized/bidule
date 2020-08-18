@@ -1,20 +1,19 @@
 //! The bidule FRP crate.
 //!
-//! This crate provides a few simple primitives to write FRP-driven programs. Everything revolves
-//! around the concept of a `Stream`.
+//! This crate provides few simple primitives to write FRP-driven programs. Everything revolves
+//! around the concept of a [`Stream`].
 //!
 //! # Streams
 //!
-//! A `Stream` is a *stream of typed signals*. A stream of signals will get a *signal* as input
+//! A [`Stream`] is a *stream of typed signals*. A stream of signals will get a *signal* as input
 //! and will broadcast it downwards. You can compose streams with each other with very simple
-//! combinators, such as `map`, `filter`, `filter_map`, `zip`, `unzip`, `merge`, `fold`, `sink`,
-//! etc.
+//! combinators, such as `map`, `filter`, `filter_map`, `zip`, `unzip`, `merge`, `fold`, etc. (non-exhaustive list).
 //!
 //! ## Creating streams and send signals
 //!
 //! Streams are typed. You can use type inference or give them an explicit type:
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! let my_stream: Stream<i32> = Stream::new();
@@ -28,7 +27,7 @@
 //!
 //! When you’re ready to send signals, just call the `send` function:
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! let my_stream: Stream<i32> = Stream::new();
@@ -38,18 +37,18 @@
 //! my_stream.send(&3);
 //! ```
 //!
-//! ## Subscriptions
+//! ## Observing signals
 //!
 //! A single stream like that one won’t do much – actually, it’ll do nothing. The first thing we
 //! might want to do is to subscribe a closure to do something when a signal is emitted. This is
-//! done with the `subscribe` function.
+//! done with the [`Stream::observe`] function.
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! let my_stream: Stream<i32> = Stream::new();
-//! 
-//! my_stream.subscribe(|sig| {
+//!
+//! my_stream.observe(|sig| {
 //!   // print the signal on stdout each time it’s flowing in
 //!   println!("signal: {:?}", sig);
 //! });
@@ -68,7 +67,7 @@
 //!
 //! Let’s get our feet wet: let’s create a new stream that will only emit signals for even values:
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! let int_stream: Stream<i32> = Stream::new();
@@ -80,7 +79,7 @@
 //! Let’s try something more complicated: on those signals, if the value is less or equal to 10,
 //! output `"Hello, world!"`; otherwise, output `"See you!"`.
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! let int_stream: Stream<i32> = Stream::new();
@@ -92,7 +91,7 @@
 //!
 //! Ok, let’s try something else. Some kind of a *Hello world* for FRP.
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! enum Button {
@@ -159,7 +158,7 @@
 //! [Iterator](https://doc.rust-lang.org/std/iter/trait.Iterator.html) trait. For instance,
 //! non-blocking reads:
 //!
-//! ```
+//! ```rust
 //! use bidule::Stream;
 //!
 //! enum Button {
@@ -181,7 +180,7 @@
 //!        .merge(&plus.filter_map(|b| unbuttonify(b, 1)))
 //!        .fold(0, |a, x| a + x);
 //!
-//! let rx = counter.sink();
+//! let rx = counter.recv();
 //!
 //! // do something with minus and plus
 //! // …
@@ -193,13 +192,20 @@
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{channel, Receiver};
 
-type Subscribers<'a, Sig> = RefCell<Vec<Box<FnMut(&Sig) + 'a>>>;
+/// List of subscribers to a stream.
+///
+/// When a stream emit a value, it streams the value down to all subscribers.
+type Subscribers<'a, Sig> = RefCell<Vec<Box<dyn FnMut(&Sig) + 'a>>>;
 
-enum SubscribersRef<'a, Sig> {
+/// Dependent streams that will receive values.
+///
+/// Most streams will own their subscribers. However, in some cases, it’s required not to own
+/// the subscribers to break rc cycles.
+enum DependentStreams<'a, Sig> {
   Own(Rc<Subscribers<'a, Sig>>),
-  Weak(Weak<Subscribers<'a, Sig>>)
+  Weak(Weak<Subscribers<'a, Sig>>),
 }
 
 /// Either one or another type.
@@ -207,34 +213,41 @@ enum SubscribersRef<'a, Sig> {
 /// This type is especially useful for zipping and unzipping streams. If a stream has a type like
 /// `Stream<Either<A, B>>`, it means you can unzip it and get two streams: `Stream<A>` and
 /// `Stream<B>`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Either<A, B> {
+  /// Left part of the merger.
   Left(A),
-  Right(B)
+  /// Right part of the merger.
+  Right(B),
 }
 
 /// A stream of signals.
 ///
 /// A stream represents a composable signal producer. When you decide to send a signal down a
 /// stream, any other streams composed with that first stream will also receive the signal. This
-/// enables to construct more interesting and complex streams by composing them.
+/// enables to construct more interesting and complex streams by composing them via, for instance,
+/// [`Stream::map`], [`Stream::filter_map`], [`Stream::filter`], [`Stream::fold`],
+/// [`Stream::merge`], [`Stream::zip`], etc.
 pub struct Stream<'a, Sig> {
-  subscribers: SubscribersRef<'a, Sig>
+  subscribers: DependentStreams<'a, Sig>,
 }
 
-impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
+impl<'a, Sig> Stream<'a, Sig>
+where
+  Sig: 'a,
+{
   /// Create a new stream.
   pub fn new() -> Self {
-    let subscribers = SubscribersRef::Own(Rc::new(RefCell::new(Vec::new())));
+    let subscribers = DependentStreams::Own(Rc::new(RefCell::new(Vec::new())));
     Stream { subscribers }
   }
 
-  /// Create a new, version of this stream by behaving the same way as the input reference (if it’s
+  /// Create a new version of this stream by behaving the same way as the input reference (if it’s
   /// an owned pointer, it clones ownership; if it’s a weak pointer, it clone the weak pointer).
   fn new_same(&self) -> Self {
     let subscribers = match self.subscribers {
-      SubscribersRef::Own(ref rc) => SubscribersRef::Own(rc.clone()),
-      SubscribersRef::Weak(ref weak) => SubscribersRef::Weak(weak.clone())
+      DependentStreams::Own(ref rc) => DependentStreams::Own(rc.clone()),
+      DependentStreams::Weak(ref weak) => DependentStreams::Weak(weak.clone()),
     };
 
     Stream { subscribers }
@@ -243,21 +256,23 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   /// Create new, non-owning version of this stream.
   fn new_weak(&self) -> Self {
     let subscribers = match self.subscribers {
-      SubscribersRef::Own(ref rc) => SubscribersRef::Weak(Rc::downgrade(rc)),
-      SubscribersRef::Weak(ref weak) => SubscribersRef::Weak(weak.clone())
+      DependentStreams::Own(ref rc) => DependentStreams::Weak(Rc::downgrade(rc)),
+      DependentStreams::Weak(ref weak) => DependentStreams::Weak(weak.clone()),
     };
 
     Stream { subscribers }
   }
 
-  /// Subscribe a new listener for this stream’s signals.
+  /// Observe a stream signal output flowing out of the stream.
   ///
-  /// This function enables to “observe” any signal flowing out of the stream. However, do not abuse
-  /// this function, as its primary use is to build other combinators.
-  pub fn subscribe<F>(&self, subscriber: F) where F: 'a + FnMut(&Sig) {
+  /// Do not abuse this function, as its primary use is to build other combinators.
+  pub fn observe<F>(&self, subscriber: F)
+  where
+    F: 'a + FnMut(&Sig),
+  {
     match self.subscribers {
-      SubscribersRef::Own(ref subscribers) => subscribers.borrow_mut().push(Box::new(subscriber)),
-      SubscribersRef::Weak(ref weak) => {
+      DependentStreams::Own(ref subscribers) => subscribers.borrow_mut().push(Box::new(subscriber)),
+      DependentStreams::Weak(ref weak) => {
         if let Some(subscribers) = weak.upgrade() {
           subscribers.borrow_mut().push(Box::new(subscriber));
         }
@@ -268,13 +283,13 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   /// Send a signal down the stream.
   pub fn send(&self, signal: &Sig) {
     match self.subscribers {
-      SubscribersRef::Own(ref subscribers) => {
+      DependentStreams::Own(ref subscribers) => {
         for sub in subscribers.borrow_mut().iter_mut() {
           sub(signal);
         }
       }
 
-      SubscribersRef::Weak(ref weak) => {
+      DependentStreams::Weak(ref weak) => {
         if let Some(subscribers) = weak.upgrade() {
           for sub in subscribers.borrow_mut().iter_mut() {
             sub(signal);
@@ -284,40 +299,38 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
     }
   }
 
-  /// Map any signals flowing out a stream.
+  /// Map any signals flowing out of a stream.
   ///
   /// Please note that this function is total: you cannot ignore signals. Even if you map
   /// *uninteresting signals* to `None`, you’ll still compose signals for those. If you're interested
-  /// in filtering signals while mapping, have a look at the `filter_map` function.
-  pub fn map<F, OutSig>(
-    &self,
-    f: F
-  ) -> Stream<'a, OutSig>
-    where F: 'a + Fn(&Sig) -> OutSig,
-          OutSig: 'a {
+  /// in filtering signals while mapping, have a look at the [`Stream::filter_map`] function.
+  pub fn map<F, OutSig>(&self, f: F) -> Stream<'a, OutSig>
+  where
+    F: 'a + Fn(&Sig) -> OutSig,
+    OutSig: 'a,
+  {
     let mapped_stream = Stream::new();
     let mapped_stream_ = mapped_stream.new_same();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       mapped_stream_.send(&f(sig));
     });
 
     mapped_stream
   }
 
-  /// Filter and map signals flowing out a stream.
+  /// Filter and map signals flowing out of a stream.
   ///
-  /// If you’re not interested in a specific signal, you can emit `None`: no signal will be sent.
-  pub fn filter_map<F, OutSig>(
-    &self,
-    f: F
-  ) -> Stream<'a, OutSig>
-    where F: 'a + Fn(&Sig) -> Option<OutSig>,
-          OutSig: 'a {
+  /// If you’re not interested in a specific signal, you can emit [`None`]: no signal will be sent.
+  pub fn filter_map<F, OutSig>(&self, f: F) -> Stream<'a, OutSig>
+  where
+    F: 'a + Fn(&Sig) -> Option<OutSig>,
+    OutSig: 'a,
+  {
     let mapped_stream = Stream::new();
     let mapped_stream_ = mapped_stream.new_same();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       if let Some(ref mapped_sig) = f(sig) {
         mapped_stream_.send(mapped_sig);
       }
@@ -327,11 +340,14 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   }
 
   /// Filter the signals flowing out of a stream with a predicate.
-  pub fn filter<F>(&self, pred: F) -> Self where F: 'a + Fn(&Sig) -> bool {
+  pub fn filter<F>(&self, pred: F) -> Self
+  where
+    F: 'a + Fn(&Sig) -> bool,
+  {
     let filtered = Stream::new();
     let filtered_ = filtered.new_same();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       if pred(sig) {
         filtered_.send(sig);
       }
@@ -341,18 +357,16 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   }
 
   /// Fold all signals flowing out of a stream into a stream of values.
-  pub fn fold<F, A>(
-    &self,
-    value: A,
-    f: F
-  ) -> Stream<'a, A>
-    where F: 'a + Fn(A, &Sig) -> A,
-          A: 'a {
+  pub fn fold<F, A>(&self, value: A, f: F) -> Stream<'a, A>
+  where
+    F: 'a + Fn(A, &Sig) -> A,
+    A: 'a,
+  {
     let folded_stream = Stream::new();
     let folded_stream_ = folded_stream.new_same();
     let mut boxed = Some(value);
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       if let Some(value) = boxed.take() {
         let output = f(value, sig);
         folded_stream_.send(&output);
@@ -372,34 +386,68 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
     let merged_self = merged.new_same();
     let merged_rhs = merged.new_same();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       merged_self.send(sig);
     });
 
-    rhs.subscribe(move |sig| {
+    rhs.observe(move |sig| {
       merged_rhs.send(sig);
     });
 
     merged
   }
 
-  // FIXME: see whether we can do the same thing without Clone
+  /// Merge two streams into one with incompatible types.
+  ///
+  /// This method performs the same logical operation as:
+  ///
+  /// ```rust
+  /// use bidule::Stream;
+  ///
+  /// let stream_a = Stream::new();
+  /// let stream_b = Stream::new();
+  /// let merged = stream_a.merge(&stream_b.map(String::len));
+  /// ```
+  ///
+  /// However, because it does it in a more optimal way, you are advised to use this combinator
+  /// instead.
+  pub fn merge_with<F, SigRHS>(&self, rhs: &Stream<'a, SigRHS>, adapter: F) -> Self
+  where
+    F: 'a + Fn(&SigRHS) -> Sig,
+    SigRHS: 'a,
+  {
+    let merged = Stream::new();
+    let merged_self = merged.new_same();
+    let merged_rhs = merged.new_same();
+
+    self.observe(move |sig| {
+      merged_self.send(sig);
+    });
+
+    rhs.observe(move |sig| {
+      merged_rhs.send(&adapter(sig));
+    });
+
+    merged
+  }
+
   /// Zip two streams with each other.
-  pub fn zip<SigRHS>(
-    &self,
-    rhs: &Stream<'a, SigRHS>
-  ) -> Stream<'a, Either<Sig, SigRHS>>
-  where Sig: Clone,
-        SigRHS: 'a + Clone {
+  ///
+  /// The resulting stream will output [`Either`] from one or the other stream.
+  pub fn zip<SigRHS>(&self, rhs: &Stream<'a, SigRHS>) -> Stream<'a, Either<Sig, SigRHS>>
+  where
+    Sig: Clone,
+    SigRHS: 'a + Clone,
+  {
     let zipped = Stream::new();
     let zipped_self = zipped.new_same();
     let zipped_rhs = zipped.new_same();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       zipped_self.send(&Either::Left(sig.clone()));
     });
 
-    rhs.subscribe(move |sig| {
+    rhs.observe(move |sig| {
       zipped_rhs.send(&Either::Right(sig.clone()));
     });
 
@@ -412,25 +460,24 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   /// the signals are defined in terms of each other, it’s quite easy to cause infinite loops if you
   /// don’t have a well-defined bottom to your recursion. This is why you’re expected to return
   /// `Option<_>` signals.
-  pub fn entangled<F, G, GSig>(
-    f: F,
-    g: G
-  ) -> (Self, Stream<'a, GSig>)
-    where F: 'a + Fn(&Sig) -> Option<GSig>,
-          G: 'a + Fn(&GSig) -> Option<Sig>,
-          GSig: 'a {
+  pub fn entangled<F, G, GSig>(f: F, g: G) -> (Self, Stream<'a, GSig>)
+  where
+    F: 'a + Fn(&Sig) -> Option<GSig>,
+    G: 'a + Fn(&GSig) -> Option<Sig>,
+    GSig: 'a,
+  {
     let fs = Stream::new();
     let gs = Stream::new();
     let fs_ = fs.new_weak();
     let gs_ = gs.new_weak();
 
-    fs.subscribe(move |sig| {
+    fs.observe(move |sig| {
       if let Some(sig_) = f(sig) {
         gs_.send(&sig_);
       }
     });
 
-    gs.subscribe(move |sig| {
+    gs.observe(move |sig| {
       if let Some(sig_) = g(sig) {
         fs_.send(&sig_);
       }
@@ -440,10 +487,15 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   }
 
   /// Sink a stream.
-  pub fn sink(&self) -> Receiver<Sig> where Sig: Clone {
+  ///
+  /// This method allows to _receive_ the signal and extract it out of the stream via a channel.
+  pub fn recv(&self) -> Receiver<Sig>
+  where
+    Sig: Clone,
+  {
     let (sx, rx) = channel();
 
-    self.subscribe(move |sig| {
+    self.observe(move |sig| {
       let _ = sx.send(sig.clone());
     });
 
@@ -451,19 +503,24 @@ impl<'a, Sig> Stream<'a, Sig> where Sig: 'a {
   }
 }
 
-impl<'a, SigA, SigB> Stream<'a, Either<SigA, SigB>> where SigA: 'static, SigB: 'static {
+impl<'a, SigA, SigB> Stream<'a, Either<SigA, SigB>>
+where
+  SigA: 'static,
+  SigB: 'static,
+{
   /// Split a stream of zipped values into two streams.
+  ///
+  /// If the [`Either::Left`] part of the stream emits a signal, it is sent to the first stream.
+  /// If the [`Either::Right`] part of the tream emits, it is sent to the second stream.
   pub fn unzip(&self) -> (Stream<'a, SigA>, Stream<'a, SigB>) {
     let a = Stream::new();
     let a_ = a.new_same();
     let b = Stream::new();
     let b_ = b.new_same();
 
-    self.subscribe(move |sig| {
-      match *sig {
-        Either::Left(ref l) => a_.send(l),
-        Either::Right(ref r) => b_.send(r)
-      }
+    self.observe(move |sig| match *sig {
+      Either::Left(ref l) => a_.send(l),
+      Either::Right(ref r) => b_.send(r),
     });
 
     (a, b)

@@ -8,13 +8,13 @@ fn frp() {
   use std::rc::Rc;
 
   enum Button {
-    Push
+    Push,
   }
 
   enum Counter {
     Increment,
     Decrement,
-    Reset
+    Reset,
   }
 
   let minus_button: Stream<Button> = Stream::new();
@@ -25,18 +25,20 @@ fn frp() {
   let plus = plus_button.map(|_| Counter::Increment);
   let reset = reset_button.map(|_| Counter::Reset);
 
-  let label = minus.merge(&plus).merge(&reset).fold(0, |x, sig| {
-    match *sig {
+  let label = minus
+    .merge(&plus)
+    .merge(&reset)
+    .fold(0, |x, sig| match *sig {
       Counter::Increment => x + 1,
       Counter::Decrement => x - 1,
-      Counter::Reset => 0
-    }
-  }).filter(|x| x % 2 == 0); // get only even counters
+      Counter::Reset => 0,
+    })
+    .filter(|x| x % 2 == 0); // get only even counters
 
   // FIXME: this part is ugly, we need to find a better API for “inspecting” streams
   let counter = Rc::new(RefCell::new(0));
   let counter_ = counter.clone();
-  label.subscribe(move |x| *counter_.borrow_mut() = *x);
+  label.observe(move |x| *counter_.borrow_mut() = *x);
 
   assert_eq!(*counter.borrow(), 0);
 
@@ -61,13 +63,13 @@ fn mutual_recursion() {
   #[derive(Clone, Debug, Eq, PartialEq)]
   enum Button {
     ChangeLabel(String),
-    Push
+    Push,
   }
 
   fn f(sig: &Button) -> Option<Button> {
     match *sig {
       Button::Push => Some(Button::ChangeLabel("foo".to_owned())),
-      _ => None
+      _ => None,
     }
   }
 
@@ -79,8 +81,8 @@ fn mutual_recursion() {
   let y_ref = Rc::new(RefCell::new(Button::Push));
   let y_ref_ = y_ref.clone();
 
-  x.subscribe(move |a| *x_ref_.borrow_mut() = a.clone());
-  y.subscribe(move |a| *y_ref_.borrow_mut() = a.clone());
+  x.observe(move |a| *x_ref_.borrow_mut() = a.clone());
+  y.observe(move |a| *y_ref_.borrow_mut() = a.clone());
 
   assert_eq!(*x_ref.borrow(), Button::Push);
   assert_eq!(*y_ref.borrow(), Button::Push);
@@ -106,7 +108,7 @@ fn zip() {
   let z_ref = Rc::new(RefCell::new(Either::Right(3)));
   let z_ref_ = z_ref.clone();
 
-  z.subscribe(move |a| *z_ref_.borrow_mut() = a.clone());
+  z.observe(move |a| *z_ref_.borrow_mut() = a.clone());
 
   assert_eq!(*z_ref.borrow(), Either::Right(3));
 
@@ -131,8 +133,8 @@ fn unzip() {
   let y_ref = Rc::new(RefCell::new(0));
   let y_ref_ = y_ref.clone();
 
-  x.subscribe(move |a| *x_ref_.borrow_mut() = *a);
-  y.subscribe(move |a| *y_ref_.borrow_mut() = *a);
+  x.observe(move |a| *x_ref_.borrow_mut() = *a);
+  y.observe(move |a| *y_ref_.borrow_mut() = *a);
 
   assert_eq!(*x_ref.borrow(), 0);
   assert_eq!(*y_ref.borrow(), 0);
